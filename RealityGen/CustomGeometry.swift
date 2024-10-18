@@ -21,17 +21,30 @@ class MascotEntity: Entity{
     
     var y : Float = 0
     var lowLevelMesh : LowLevelMesh?
-    
+    var points = [MyPoint]()
+
     required init() {
         
         super.init()
             
+        points = Array.init(repeating: MyPoint(), count: length * length)
         
+        for i in 0..<points.count{
+           
+            points[i].isOccupied = true
+            
+        }
+        for _ in 0..<10{
+            
+            randomUpdates()
+        }
+
         do{
            // self.lowLevelMesh = try triangleMesh()
     
-            let cube = MeshResource.generateBox(size: 1.0)
-            self.lowLevelMesh = try triangleMesh()
+          //  let cube = MeshResource.generateBox(size: 1.0)
+           
+            self.lowLevelMesh = try makeMesh(true)
     
             let resource = try MeshResource(from: self.lowLevelMesh!)
             
@@ -62,109 +75,47 @@ class MascotEntity: Entity{
         }
     }
     
-    func updateMesh(){
-     
+    func updateMesh(_ highlight:Bool){
+
         return
        
-    }
-    
-
-    let length = 12
-    
-    func getCoord(_ i:Int)->(x:Int,y:Int){
-        let x = i % length
-        let y = i / length
-        print(i,x,y)
-        return (x,y)
-    }
-    
-    func getIndex(_ x:Int,_ y:Int)->Int{
-        let i =  x + (length * y)
-        print(i)
-        return i
-    }
-    
-    func getNeighbourIndex(_ i:Int,_ cellPosition:CellPosition)->Int?{
-        
-        if i == 5{
-            //print(i)
-        }
-        print(cellPosition)
-    
-        switch cellPosition {
-        case .above:
-            let coord = getCoord(i)
-            if coord.y == length - 1{
-                return nil
-            }else{
-                return getIndex(coord.x, coord.y + 1)
-            }
-        case .below:
-            let coord = getCoord(i)
-            if coord.y == 0{
-                return nil
-            }else{
-                return getIndex(coord.x, coord.y - 1)
-            }
-        case .left:
-            let coord = getCoord(i)
-            if coord.x == 0{
-                return nil
-            }else{
-                return getIndex(coord.x - 1, coord.y)
-            }
-        case .right:
-            let coord = getCoord(i)
-            if coord.x == length - 1{
-                return nil
-            }else{
-                return getIndex(coord.x + 1, coord.y)
-            }
+        do{
+            self.lowLevelMesh = try makeMesh(true)
             
+            let resource = try MeshResource(from: self.lowLevelMesh!)
+            
+            let modelComponent = ModelComponent(mesh: resource, materials: [UnlitMaterial()])
+            
+            self.components.set(modelComponent)
+            
+            Task{
+                await addMaterial()
+            }
+        }catch{
+            print("no mesh update")
         }
-   
-    }
-    
-    func getIndex(_ x:Int,_ y:Int)->Int?{
-        return (y * length) + x
-    }
-    
   
-    func triangleMesh() throws -> LowLevelMesh {
-        
-        var desc = MyVertex.descriptor
-        desc.vertexCapacity = 100000
-        desc.indexCapacity = 100000
-       
-        let mesh = try LowLevelMesh(descriptor: desc)
+        return
+        guard let mesh = try! self.lowLevelMesh else {return}
         
         var counts: [UInt8]? = []
         
-        var points = Array.init(repeating: MyPoint(), count: length * length)
-        
-        
-        for i in 0..<points.count{
-            let coord = getCoord(i)
-            print(coord)
-            points[i].color = [0,1,0]
-            if coord.x == 0 || coord.y == 0 || coord.x == length - 1 || coord.y == length - 1{
-                      points[i].color = [0,1,0]
-                points[i].isOccupied = true
+        if highlight{
+            for i in 0..<points.count{
+                let coord = getCoord(i)
+                print(coord)
+              
+                if coord.x == 0 || coord.y == 0 || coord.x == length - 1 || coord.y == length - 1{
+                    points[i].color = [0,1,0]
+                    points[i].isOccupied = true
+                }
             }
         }
         
-        points[29].isOccupied = true
-        points[29].color = [0,1,0]
+       
         for i in 0..<points.count{
+            
             let coord = getCoord(i)
-            print(coord)
-            points[i].color = [0,1,0]
-            if coord.x == 0 || coord.y == 0 || coord.x == length - 1 || coord.y == length - 1{
-            
-                points[i].color = [0,1,0]
-
-            }
-            
             
             if points[i].isOccupied{
                 
@@ -209,7 +160,7 @@ class MascotEntity: Entity{
                }
             }
           
-            
+        
            
             
             //points[i].sides.append(.top)
@@ -232,7 +183,200 @@ class MascotEntity: Entity{
         var index : Int = 0
             
         
+        
             //  let c = results.vertices.count
+        mesh.withUnsafeMutableBytes(bufferIndex: 0) { rawBytes in
+            let vertices = rawBytes.bindMemory(to: MyVertex.self)
+            for i in 0..<vertexData.positions.count{
+                let p = vertexData.positions[i]
+                let n = vertexData.normals[i]
+                let c = vertexData.colors[i]
+                vertices[i] = MyVertex(position: p,normal: n,color: c)
+        
+            }
+                
+        }
+            
+        mesh.withUnsafeMutableIndices { rawIndices in
+            let indices = rawIndices.bindMemory(to: UInt32.self)
+                //indices = results.indices.count
+            for i in 0..<vertexData.indices.count{
+                indices[i] = vertexData.indices[i]
+            }
+        }
+            
+        let meshBounds = BoundingBox(min: [-1, -1, -1], max: [1, 1, 1])
+            
+        let c = vertexData.indices.count
+        
+
+
+        mesh.parts.replaceAll([
+            LowLevelMesh.Part(
+                indexCount:Int(c),
+                topology: .triangle,
+                bounds: meshBounds
+            )
+        ])
+
+    }
+    
+
+    let length = 64
+    
+    func getCoord(_ i:Int)->(x:Int,y:Int){
+        let x = i % length
+        let y = i / length
+        return (x,y)
+    }
+    
+    func getIndex(_ x:Int,_ y:Int)->Int{
+        let i =  x + (length * y)
+        print(i)
+        return i
+    }
+    
+    func randomUpdates(){
+        
+        let randomIndex = Int.random(in: 0..<length * length)
+        let randomBoolean = Bool.random()
+        let randomColor = SIMD3<Float>.random(in: 0..<1)
+        
+        points[randomIndex].isOccupied = randomBoolean
+        points[randomIndex].color = randomColor
+    }
+    
+    func getNeighbourIndex(_ i:Int,_ cellPosition:CellPosition)->Int?{
+       
+    
+        switch cellPosition {
+        case .above:
+            let coord = getCoord(i)
+            if coord.y == length - 1{
+                return nil
+            }else{
+                return getIndex(coord.x, coord.y + 1)
+            }
+        case .below:
+            let coord = getCoord(i)
+            if coord.y == 0{
+                return nil
+            }else{
+                return getIndex(coord.x, coord.y - 1)
+            }
+        case .left:
+            let coord = getCoord(i)
+            if coord.x == 0{
+                return nil
+            }else{
+                return getIndex(coord.x - 1, coord.y)
+            }
+        case .right:
+            let coord = getCoord(i)
+            if coord.x == length - 1{
+                return nil
+            }else{
+                return getIndex(coord.x + 1, coord.y)
+            }
+            
+        }
+   
+    }
+    
+    func getIndex(_ x:Int,_ y:Int)->Int?{
+        return (y * length) + x
+    }
+    
+  
+    func makeMesh(_ highlight:Bool) throws -> LowLevelMesh {
+        
+        var desc = MyVertex.descriptor
+        desc.vertexCapacity = 100000
+        desc.indexCapacity = 100000
+       
+        let mesh = try LowLevelMesh(descriptor: desc)
+        
+        var counts: [UInt8]? = []
+        
+  
+        
+        
+        if highlight{
+            for i in 0..<points.count{
+                let coord = getCoord(i)
+                print(coord)
+                points[i].color = [0,1,0]
+                if coord.x == 0 || coord.y == 0 || coord.x == length - 1 || coord.y == length - 1{
+                          points[i].color = [0,1,0]
+                    points[i].isOccupied = true
+                }
+            }
+        }
+        
+       
+        for i in 0..<points.count{
+            let coord = getCoord(i)
+        
+            
+            if points[i].isOccupied{
+                
+                print(i, "at",coord)
+
+                
+                if let index = getNeighbourIndex(i, .above){
+                    if !points[index].isOccupied{
+                         points[i].sides.append(.top)
+                    }
+                }else{
+                    points[i].sides.append(.top)
+                }
+                
+                if let index = getNeighbourIndex(i, .left){
+                    if !points[index].isOccupied{
+                        points[i].sides.append(.left)
+                    }
+                }else{
+                    points[i].sides.append(.left)
+                }
+                
+                if let index = getNeighbourIndex(i, .right){
+                    if !points[index].isOccupied{
+                        points[i].sides.append(.right)
+                    }
+                }else{
+                    points[i].sides.append(.right)
+                }
+                
+                if let index = getNeighbourIndex(i, .below){
+                    if !points[index].isOccupied{
+                        points[i].sides.append(.bottom)
+                    }
+                }else{
+                    points[i].sides.append(.bottom)
+                }
+                
+                if points[i].isOccupied{
+                    points[i].sides.append(.front)
+                    points[i].sides.append(.back)
+               }
+            }
+            
+            let scale = Float(1.0) / Float(length)
+            points[i].scale = scale// * 0.5
+            let halfLength : Float = Float(length) / Float(2.0)
+            
+            let pos = SIMD3<Float>(Float(coord.x) - halfLength,(Float(coord.y) - halfLength),0) * scale
+            points[i].position = pos
+            
+        }
+        
+        //points.append(MyPoint(position: .zero,color: [0,1,0]))
+   
+        let vertexData = buildMesh(points: points, counts: &counts)
+        
+          
+        var index : Int = 0
+     
         mesh.withUnsafeMutableBytes(bufferIndex: 0) { rawBytes in
             let vertices = rawBytes.bindMemory(to: MyVertex.self)
             for i in 0..<vertexData.positions.count{
@@ -267,6 +411,7 @@ class MascotEntity: Entity{
 
         return mesh
     }
+    
 }
 
 struct MyPoint {
@@ -361,42 +506,7 @@ func buildMesh(points:[MyPoint],counts: inout [UInt8]?) -> (
                 Vector(0.5, 0.0, 0.5),
                 Vector(-0.5, 0.0, -0.5),
                 Vector(-0.5, 0.0, 0.5)
-                
-//                //bottom right
-//                Vector(0.0, 0.0, 0.0),
-//                Vector(0.0, 0.0, 0.5),
-//                Vector(0.5, 0.0, 0.5),
-//                
-//                //top left
-//                Vector(0.0, 0.0, -0.5),
-//                Vector(-0.5, 0.0, -0.5),
-//                Vector(-0.0, 0.0, 0.0),
-//                
-//                //top right
-//                Vector(0.0, 0.0, -0.5),
-//                Vector(-0.0, 0.0, 0.0),
-//                Vector(0.5, 0.0, -0.5),
-//                
-//                //mid bottom left
-//                Vector(0.0, 0.0, 0.0),
-//                Vector(-0.5, 0.0, 0.0),
-//                Vector(-0.5, 0.0, 0.5),
-//                
-//                //mid bottom left
-//                Vector(0.0, 0.0, 0.0),
-//                Vector(0.5, 0.0, 0.5),
-//                Vector(0.5, 0.0, 0.0),
-//                
-//                //mid top left
-//                Vector(0.0, 0.0, 0.0),
-//                Vector(-0.5, 0.0, -0.5),
-//                Vector(-0.5, 0.0, 0.0),
-//
-//                //mid top right
-//                Vector(0.0, 0.0, 0.0),
-//                Vector(0.5, 0.0, 0.0),
-//                Vector(0.5, 0.0, -0.5)
-//             
+           
             ]
             
           
