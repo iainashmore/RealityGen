@@ -9,8 +9,15 @@ import UIKit
 import StableDiffusion
 import CoreML
 
-@MainActor
-final class ImageGenerator: NSObject, ObservableObject {
+
+protocol PixelGeneratorDelegate : AnyObject {
+    func didGenerateImages( images: [UIImage])
+}
+
+
+
+class PixelGenerator: NSObject, ObservableObject {
+    
     struct GenerationParameter {
         let prompt: String
         let negativePrompt: String
@@ -32,14 +39,17 @@ final class ImageGenerator: NSObject, ObservableObject {
         case saving     // saving images into Photo Library
     }
 
-    @Published var generationState: GenerationState = .idle
-    @Published var generatedImages: GeneratedImages?
-    @Published var progressStep: (step: Int, stepCount: Int) = (0, 0) // (step, stepCount)
+    var delegate: PixelGeneratorDelegate?
+    
+    var generationState: GenerationState = .idle
+    var generatedImages: GeneratedImages?
+    var progressStep: (step: Int, stepCount: Int) = (0, 0) // (step, stepCount)
 
     private var sdPipeline: StableDiffusionPipeline?
     private var savingImageCount = 0
     private var savedImageCount = 0
 
+   
     //    func removeSDPipeline() {
     //        sdPipeline = nil    // to reduce memory consumption :(
     //    }
@@ -54,6 +64,7 @@ final class ImageGenerator: NSObject, ObservableObject {
 
     private func setGeneratedImages(_ images: GeneratedImages) { // for actor isolation
         print("images count",images.images.count)
+        self.delegate?.didGenerateImages(images: images.images)
         generatedImages = images
     }
 
@@ -64,18 +75,20 @@ final class ImageGenerator: NSObject, ObservableObject {
 
 // MARK: - Stable Diffusion
 
-extension ImageGenerator {
-    // swiftlint:disable function_body_length
+extension PixelGenerator {
+
     func generateImages(of param: GenerationParameter, enableStableDiffusion: Bool) {
+       
         guard generationState == .idle else { return }
 
         if enableStableDiffusion {
+            
             if param.prompt == "" { return }
 
             Task.detached(priority: .high) {
-                await self.setState(.generating)
+                self.setState(.generating)
 
-                if await self.sdPipeline == nil {
+                if self.sdPipeline == nil {
 
                     let bundleURL = Bundle.main.bundleURL
                  
@@ -94,7 +107,7 @@ extension ImageGenerator {
                     if let pipeline = try? StableDiffusionPipeline( resourcesAt: resourceURL,
                                                                     controlNet: [],
                                                                     configuration: config, reduceMemory: reduceMemory) {
-                        await self.setPipeline(pipeline)
+                        self.setPipeline(pipeline)
                     } else {
                         fatalError("Fatal error: failed to create the Stable-Diffusion-Pipeline.")
                     }
@@ -106,7 +119,7 @@ extension ImageGenerator {
 
                     do {
                        // debugLog("IG: generating images...")
-                        await self.setProgressStep(step: 0, stepCount: param.stepCount)
+                        self.setProgressStep(step: 0, stepCount: param.stepCount)
                         // [v1.3.0]
                         // apple/ml-stable-diffusion v0.2.0 changed the generateImages() API
                         // to generateImages(configuration:progressHandler:)
@@ -137,13 +150,13 @@ extension ImageGenerator {
                             if let cgImage = image { return UIImage(cgImage: cgImage)
                             } else { return nil }
                         }
-                        await self.setGeneratedImages(GeneratedImages(parameter: param, images: uiImages))
+                        self.setGeneratedImages(GeneratedImages(parameter: param, images: uiImages))
                     } catch {
                         print("failed to generate images.")
                     }
                 }
 
-                await self.setState(.idle)
+                self.setState(.idle)
             }
         } 
     }
@@ -182,42 +195,4 @@ extension ImageGenerator {
     }
 }
 
-// MARK: - Save images in the Photo Library
 
-extension ImageGenerator {
-    func saveImagesIntoPhotoLibrary(images: [UIImage]) {
-        guard generationState == .idle else { return }
-
-        savingImageCount = images.count
-        savedImageCount = 0
-        generationState = .saving
-        images.forEach { image in
-            saveImageIntoPhotoLibrary(image: image)
-        }
-    }
-
-    private func saveImageIntoPhotoLibrary(image: UIImage) {
-        // Adds the specified image to the user’s Camera Roll album.
-        UIImageWriteToSavedPhotosAlbum(image, // UIImage
-                                       self,  // completionTarget
-                                       #selector(didFinishSaving), // completionSelector
-                                       nil) // contextInfo
-    }
-
-    @objc func didFinishSaving(_ image: UIImage, didFinishSavingWithError error: Error?,
-                               contextInfo: UnsafeRawPointer) {
-        assert(generationState == .saving)
-
-        savedImageCount += 1 // including errors
-        if savedImageCount == savingImageCount {
-            generationState = .idle
-        }
-
-        if let error {
-            print("GEN: Error: failed to save an image to Camera Roll album.")
-            print(" - \(error.localizedDescription)")
-        } else {
-            print("GEN: completed saving an image into Photo Library.")
-        }
-    }
-}

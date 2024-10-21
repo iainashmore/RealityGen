@@ -19,6 +19,7 @@
 		1729C98D2CBEF4D4006D5CD9 /* Exceptions for "RealityGen" folder in "RealityGen" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				Conversion/convert_original_stable_diffusion_to_diffusers.py,
 				Euclid/Info.plist,
 			);
 			target = 1729C9262CBEBD1F006D5CD9 /* RealityGen */;
@@ -275,7 +276,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = RealityGen/RealityGen.entitlements;
+				CODE_SIGN_ENTITLEMENTS = RealityGen/RealityGenDebug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"RealityGen/Preview Content\"";

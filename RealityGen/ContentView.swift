@@ -8,12 +8,52 @@
 import SwiftUI
 import RealityKit
 
-class SceneContent {
+
+class SceneContent : PixelGeneratorDelegate {
+    
+    
+    
+    init() {
+        
+        print("setup scene content")
+        self.pixelGenerator.delegate = self
+    }
   
     let customEntity = MascotEntity()
-
+    
+    var pixelGenerator = PixelGenerator()
+    @Published var generatedImage : UIImage?
+    
     func update(timestep: TimeInterval) {
         customEntity.updateMesh(true)
+    }
+    
+    func generateImage(){
+        
+        let generationParameter =
+        PixelGenerator.GenerationParameter(
+            prompt: "Godzilla, full body game asset, in pixelsprite style",
+            negativePrompt: "scenery",
+            guidanceScale: 10.0,
+            seed: 1_000_000,
+            stepCount: 40,
+            imageCount: 1,
+            disableSafety: false)
+
+        pixelGenerator.generateImages(of: generationParameter, enableStableDiffusion: true)
+        
+    }
+    
+    func didGenerateImages(images:[UIImage]) {
+        print("did generate Images",images.count)
+        if let image = images.first{
+            print("image size",image.size)
+            self.generatedImage = images.first
+        }
+    }
+    
+    func newImage(images:[UIImage]) {
+        print("new Images")
     }
 }
 
@@ -25,15 +65,12 @@ struct ContentView : View {
     @ObservedObject private var imageGenerator = ImageGenerator()
     @State private var generationParameter =
         ImageGenerator.GenerationParameter(
-                                           prompt: "Lego man",
-                                           negativePrompt: "",
-                                           guidanceScale: 8.0,
+                                           prompt: "Godzilla, full body game asset, in pixelsprite style",
+                                           negativePrompt: "scenery",
+                                           guidanceScale: 10.0,
                                            seed: 1_000_000,
-                                           stepCount: 20,
+                                           stepCount: 40,
                                            imageCount: 1, disableSafety: false)
-
-    
-
 
     @State private var sceneContent = SceneContent()
     @State private var frameDuration: TimeInterval = 0.0
@@ -75,16 +112,27 @@ struct ContentView : View {
             .ignoresSafeArea()
         }
         VStack{
-            if let generatedImages = imageGenerator.generatedImages {
-             
+            
+            if let image = sceneContent.generatedImage {
                 VStack{
-                    Image(uiImage: generatedImages.images[0])
+                    Image(uiImage: image)
                             .resizable()
                             .scaledToFit()
                 }
             }
+            
+           
+            if let generatedImages = imageGenerator.generatedImages {
+             
+               
+                VStack{
+                    //Image(uiImage: generatedImages.images[0])
+                       //     .resizable()
+                       //     .scaledToFit()
+                }
+            }
            Button("Generate Image") {
-               generate()
+               sceneContent.generateImage()
             }
         }
     }
