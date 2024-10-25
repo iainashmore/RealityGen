@@ -9,6 +9,7 @@ import RealityKit
 import RealityMascotKit
 import Foundation
 import UIKit
+import CoreML
 
 enum CellPosition{
     case above
@@ -23,28 +24,44 @@ class MascotEntity: Entity{
     var lowLevelMesh : LowLevelMesh?
     var points = [MyPoint]()
 
+    let semaphore = DispatchSemaphore(value: 1)
+    let queue = DispatchQueue(label: "com.3d.queue", attributes: .concurrent)
+
+    
+    var maxVertexCount : Int{
+        return (kImageLength * kImageLength * 6 * 6)
+    }
+    
+    var maxPointCount : Int{
+        return (kImageLength * kImageLength)
+    }
+    
     required init() {
         
         super.init()
             
-        points = Array.init(repeating: MyPoint(), count: length * length)
+        points = Array.init(repeating: MyPoint(), count: kImageLength * kImageLength)
         
-        for i in 0..<points.count{
-           
-            points[i].isOccupied = true
-            
-        }
-        for _ in 0..<10{
-            
-            randomUpdates()
-        }
+        updatePoints()
+        let vertexData = makeVertexData(points: points)
+        makeGeometryModel(vertexData: vertexData)
 
+       // makeNewGeometry()
+        
+    }
+    
+    func makeGeometryModel(vertexData: VertexData){
+        
+        semaphore.wait()
+    
+        //if hasMadeGeometry { return }
+        print("make new geometry")
         do{
            // self.lowLevelMesh = try triangleMesh()
     
           //  let cube = MeshResource.generateBox(size: 1.0)
            
-            self.lowLevelMesh = try makeMesh(true)
+            self.lowLevelMesh = try makeMesh(vertexData)
     
             let resource = try MeshResource(from: self.lowLevelMesh!)
             
@@ -59,7 +76,17 @@ class MascotEntity: Entity{
         }catch{
             print("no mesh")
         }
+       // hasMadeGeometry = true
         
+ 
+        semaphore.signal()
+        
+    }
+    
+    func updateGeometryModel(vertexData: VertexData){
+        semaphore.wait()
+        updateMesh(vertexData)
+        semaphore.signal()
     }
     
     func addMaterial() async{
@@ -74,57 +101,172 @@ class MascotEntity: Entity{
             print("material error")
         }
     }
+    var hasUpdates = false
     
-    func updateMesh(_ highlight:Bool){
-
-        return
-       
-        do{
-            self.lowLevelMesh = try makeMesh(true)
-            
-            let resource = try MeshResource(from: self.lowLevelMesh!)
-            
-            let modelComponent = ModelComponent(mesh: resource, materials: [UnlitMaterial()])
-            
-            self.components.set(modelComponent)
-            
-            Task{
-                await addMaterial()
-            }
-        }catch{
-            print("no mesh update")
-        }
-  
-        return
-        guard let mesh = try! self.lowLevelMesh else {return}
-        
-        var counts: [UInt8]? = []
-        
-        if highlight{
-            for i in 0..<points.count{
-                let coord = getCoord(i)
-                print(coord)
+    
+    func updateWithArray(_ result:[MLMultiArray], _ final:Bool){
               
-                if coord.x == 0 || coord.y == 0 || coord.x == length - 1 || coord.y == length - 1{
-                    points[i].color = [0,1,0]
-                    points[i].isOccupied = true
+        if let r = result.first{
+            mapImage(r)
+            assignPointSides()
+            
+            let vertexData = makeVertexData(points: self.points)
+            
+            if !final{
+                self.updateGeometryModel(vertexData: vertexData)
+            }else{
+                //self.makeGeometryModel(vertexData: vertexData)
+            }
+        }
+   
+    }
+    
+    
+    func mapImage(_ inputArray:MLMultiArray){
+        
+       for i in 0..<kImageLength * kImageLength{
+            
+           
+           let coord = getCoord(i)
+           let x = coord.x
+           let y = kImageLength - coord.y - 1
+           let rIndex = (0 * (kImageLength*kImageLength)) + (y * kImageLength) + x
+           let gIndex = (1 * (kImageLength*kImageLength)) + (y * kImageLength) + x
+           let bIndex = (2 * (kImageLength*kImageLength)) + (y * kImageLength) + x
+           
+           var r = inputArray[rIndex].floatValue
+           var g = inputArray[gIndex].floatValue
+           var b = inputArray[bIndex].floatValue
+          
+           r += 0.485 * 0.226
+           g += 0.456 * 0.226
+           b += 0.406 * 0.226
+           
+           r += 1.0 * 0.5
+           g += 1.0 * 0.5
+           b += 1.0 * 0.5
+//           scale = 1.0 / (255.0 * 0.226)
+//           red_bias = -0.485 / 0.226
+//           green_bias = -0.456 / 0.226
+//           blue_bias = -0.406 / 0.226
+           
+           self.points[i].isOccupied = true
+           self.points[i].color = simd_float3(r, g, b)
+            
+        }
+      
+    }
+    
+    
+    func updateWithImage(_ image:CGImage, _ final:Bool){
+        print("updateWithImage",image.width,image.height)
+        
+        DispatchQueue.main.async {
+            
+        guard let data = image.dataProvider?.data else {return}
+       
+        let firstColor = image.getPixelColor(0, 0,data)
+        
+        for i in 0..<kImageLength * kImageLength{
+        
+            let coord = self.getCoord(i)
+            
+            let color = image.getPixelColor(coord.x, kImageLength - coord.y,data)
+            self.points[i].isOccupied = true
+            
+            if final{
+                if color.x.compare(with: firstColor.x, precision: kPrecision){
+                    if color.y.compare(with: firstColor.y, precision: kPrecision){
+                        if color.z.compare(with: firstColor.z, precision: kPrecision){
+                            self.points[i].isOccupied = false
+                        }
+                    }
                 }
             }
+            
+            self.points[i].color = color
+            
+        }
+            self.updatePoints()
+          
+    
+            
+            
+            
+            let vertexData = makeVertexData(points: self.points)
+            
+            if !final{
+                self.updateGeometryModel(vertexData: vertexData)
+            }else{
+                self.makeGeometryModel(vertexData: vertexData)
+            }
+            
+        }
+       
+    }
+    
+  
+    func updateWithSparkle(){
+        
+        return
+        
+        updatePoints()
+        
+        sparklePoints()
+        
+        DispatchQueue.main.async {
+            
+            let vertexData = makeVertexData(points: self.points)
+ 
+            self.updateGeometryModel(vertexData: vertexData)
+        }
+    }
+    
+    var hasMadeGeometry = false
+    
+    func highlightPoints(){
+        
+        for i in 0..<points.count{
+            let coord = getCoord(i)
+        
+              
+            if coord.x == 0 || coord.y == 0 || coord.x == kImageLength - 1 || coord.y == kImageLength - 1{
+                points[i].color = [1,1,0]
+                points[i].isOccupied = true
+            }
         }
         
-       
-        for i in 0..<points.count{
+    }
+    
+    func sparklePoints(){
+        for _ in 0..<5{
+            let x = Int.random(in: 1..<kImageLength-1)
+            let y = Int.random(in: 1..<kImageLength-1)
+            let i = getIndex(x, y)
+            points[i].color = SIMD3(Float.random(in: 0...1), Float.random(in: 0...1),Float.random(in: 0...1))
+            points[i].isOccupied = true
+        }
+    }
+    
+    func clearPointSides(){
+        for i in 0..<maxPointCount{
+            points[i].sides.removeAll()
+        }
+    }
+    
+    func assignPointSides(){
+        
+        clearPointSides()
+        
+        for i in 0..<maxPointCount{
             
             let coord = getCoord(i)
             
             if points[i].isOccupied{
                 
-                print(i, "at",coord)
-
-                
                 if let index = getNeighbourIndex(i, .above){
                     if !points[index].isOccupied{
-                         points[i].sides.append(.top)
+                        points[i].sides.append(.top)
                     }
                 }else{
                     points[i].sides.append(.top)
@@ -157,88 +299,34 @@ class MascotEntity: Entity{
                 if points[i].isOccupied{
                     points[i].sides.append(.front)
                     points[i].sides.append(.back)
-               }
+                }
             }
-          
-        
-           
             
-            //points[i].sides.append(.top)
-            
-            let scale = Float(1.0) / Float(length)
+            let scale = Float(1.0) / Float(kImageLength)
             points[i].scale = scale// * 0.5
-            let halfLength : Float = Float(length) / Float(2.0)
+            let halfLength : Float = Float(kImageLength) / Float(2.0)
             
             let pos = SIMD3<Float>(Float(coord.x) - halfLength,(Float(coord.y) - halfLength),0) * scale
             points[i].position = pos
-            
         }
-        
-        //points.append(MyPoint(position: .zero,color: [0,1,0]))
-   
-        let vertexData = buildMesh(points: points, counts: &counts)
-        
-          
-        // let results = skeleton.generateMesh()
-        var index : Int = 0
-            
-        
-        
-            //  let c = results.vertices.count
-        mesh.withUnsafeMutableBytes(bufferIndex: 0) { rawBytes in
-            let vertices = rawBytes.bindMemory(to: MyVertex.self)
-            for i in 0..<vertexData.positions.count{
-                let p = vertexData.positions[i]
-                let n = vertexData.normals[i]
-                let c = vertexData.colors[i]
-                vertices[i] = MyVertex(position: p,normal: n,color: c)
-        
-            }
-                
-        }
-            
-        mesh.withUnsafeMutableIndices { rawIndices in
-            let indices = rawIndices.bindMemory(to: UInt32.self)
-                //indices = results.indices.count
-            for i in 0..<vertexData.indices.count{
-                indices[i] = vertexData.indices[i]
-            }
-        }
-            
-        let meshBounds = BoundingBox(min: [-1, -1, -1], max: [1, 1, 1])
-            
-        let c = vertexData.indices.count
-        
-
-
-        mesh.parts.replaceAll([
-            LowLevelMesh.Part(
-                indexCount:Int(c),
-                topology: .triangle,
-                bounds: meshBounds
-            )
-        ])
-
     }
     
 
-    let length = 64
+    
+
+
     
     func getCoord(_ i:Int)->(x:Int,y:Int){
-        let x = i % length
-        let y = i / length
+        let x = i % kImageLength
+        let y = i / kImageLength
         return (x,y)
     }
     
-    func getIndex(_ x:Int,_ y:Int)->Int{
-        let i =  x + (length * y)
-        print(i)
-        return i
-    }
+
     
     func randomUpdates(){
         
-        let randomIndex = Int.random(in: 0..<length * length)
+        let randomIndex = Int.random(in: 0..<kImageLength * kImageLength)
         let randomBoolean = Bool.random()
         let randomColor = SIMD3<Float>.random(in: 0..<1)
         
@@ -252,7 +340,7 @@ class MascotEntity: Entity{
         switch cellPosition {
         case .above:
             let coord = getCoord(i)
-            if coord.y == length - 1{
+            if coord.y == kImageLength - 1{
                 return nil
             }else{
                 return getIndex(coord.x, coord.y + 1)
@@ -273,7 +361,7 @@ class MascotEntity: Entity{
             }
         case .right:
             let coord = getCoord(i)
-            if coord.x == length - 1{
+            if coord.x == kImageLength - 1{
                 return nil
             }else{
                 return getIndex(coord.x + 1, coord.y)
@@ -282,103 +370,32 @@ class MascotEntity: Entity{
         }
    
     }
+
     
-    func getIndex(_ x:Int,_ y:Int)->Int?{
-        return (y * length) + x
+    
+    func updatePoints(){
+        highlightPoints()
+        assignPointSides()
     }
     
   
-    func makeMesh(_ highlight:Bool) throws -> LowLevelMesh {
+ 
+  
+    func makeMesh(_ vertexData:VertexData) throws -> LowLevelMesh {
         
         var desc = MyVertex.descriptor
-        desc.vertexCapacity = 100000
-        desc.indexCapacity = 100000
+        desc.vertexCapacity = maxVertexCount
+        desc.indexCapacity = maxVertexCount
        
         let mesh = try LowLevelMesh(descriptor: desc)
         
-        var counts: [UInt8]? = []
         
-  
-        
-        
-        if highlight{
-            for i in 0..<points.count{
-                let coord = getCoord(i)
-                print(coord)
-                points[i].color = [0,1,0]
-                if coord.x == 0 || coord.y == 0 || coord.x == length - 1 || coord.y == length - 1{
-                          points[i].color = [0,1,0]
-                    points[i].isOccupied = true
-                }
-            }
-        }
-        
-       
-        for i in 0..<points.count{
-            let coord = getCoord(i)
-        
-            
-            if points[i].isOccupied{
-                
-                print(i, "at",coord)
-
-                
-                if let index = getNeighbourIndex(i, .above){
-                    if !points[index].isOccupied{
-                         points[i].sides.append(.top)
-                    }
-                }else{
-                    points[i].sides.append(.top)
-                }
-                
-                if let index = getNeighbourIndex(i, .left){
-                    if !points[index].isOccupied{
-                        points[i].sides.append(.left)
-                    }
-                }else{
-                    points[i].sides.append(.left)
-                }
-                
-                if let index = getNeighbourIndex(i, .right){
-                    if !points[index].isOccupied{
-                        points[i].sides.append(.right)
-                    }
-                }else{
-                    points[i].sides.append(.right)
-                }
-                
-                if let index = getNeighbourIndex(i, .below){
-                    if !points[index].isOccupied{
-                        points[i].sides.append(.bottom)
-                    }
-                }else{
-                    points[i].sides.append(.bottom)
-                }
-                
-                if points[i].isOccupied{
-                    points[i].sides.append(.front)
-                    points[i].sides.append(.back)
-               }
-            }
-            
-            let scale = Float(1.0) / Float(length)
-            points[i].scale = scale// * 0.5
-            let halfLength : Float = Float(length) / Float(2.0)
-            
-            let pos = SIMD3<Float>(Float(coord.x) - halfLength,(Float(coord.y) - halfLength),0) * scale
-            points[i].position = pos
-            
-        }
-        
-        //points.append(MyPoint(position: .zero,color: [0,1,0]))
-   
-        let vertexData = buildMesh(points: points, counts: &counts)
-        
-          
-        var index : Int = 0
-     
         mesh.withUnsafeMutableBytes(bufferIndex: 0) { rawBytes in
             let vertices = rawBytes.bindMemory(to: MyVertex.self)
+            print("max vertex Count",maxVertexCount)
+            print("actual vertices Count",vertices.count)
+            print("vertexData positions Count",vertexData.positions.count)
+            print("vertexData indices Count",vertexData.indices.count)
             for i in 0..<vertexData.positions.count{
                 let p = vertexData.positions[i]
                 let n = vertexData.normals[i]
@@ -392,6 +409,7 @@ class MascotEntity: Entity{
         mesh.withUnsafeMutableIndices { rawIndices in
             let indices = rawIndices.bindMemory(to: UInt32.self)
                 //indices = results.indices.count
+            print("indices count",vertexData.indices.count)
             for i in 0..<vertexData.indices.count{
                 indices[i] = vertexData.indices[i]
             }
@@ -410,6 +428,49 @@ class MascotEntity: Entity{
         
 
         return mesh
+    }
+    
+    func updateMesh(_ vertexData:VertexData){
+
+       
+        guard let mesh = self.lowLevelMesh else {return}
+        
+        mesh.withUnsafeMutableBytes(bufferIndex: 0) { rawBytes in
+            let vertices = rawBytes.bindMemory(to: MyVertex.self)
+            print("max vertex Count",maxVertexCount)
+            print("actual vertices Count",vertices.count)
+            print("vertexData positions Count",vertexData.positions.count)
+            print("vertexData indices Count",vertexData.indices.count)
+            for i in 0..<vertexData.positions.count{
+                let p = vertexData.positions[i]
+                let n = vertexData.normals[i]
+                let c = vertexData.colors[i]
+                vertices[i] = MyVertex(position: p,normal: n,color: c)
+        
+            }
+                
+        }
+            
+        mesh.withUnsafeMutableIndices { rawIndices in
+            let indices = rawIndices.bindMemory(to: UInt32.self)
+                //indices = results.indices.count
+            print("indices count",vertexData.indices.count)
+            for i in 0..<vertexData.indices.count{
+                indices[i] = vertexData.indices[i]
+            }
+        }
+            
+        let meshBounds = BoundingBox(min: [-1, -1, -1], max: [1, 1, 1])
+            
+        let c = vertexData.indices.count
+        mesh.parts.replaceAll([
+            LowLevelMesh.Part(
+                indexCount:Int(c),
+                topology: .triangle,
+                bounds: meshBounds
+            )
+        ])
+        
     }
     
 }
@@ -460,21 +521,22 @@ extension MyVertex {
     }
 }
 
-func buildMesh(points:[MyPoint],counts: inout [UInt8]?) -> (
-        positions: [SIMD3<Float>],
-        normals: [SIMD3<Float>],
-        texcoords: [SIMD2<Float>]?,
-        indices: [UInt32],
-        materialIndices: [UInt32],
-        colors: [SIMD3<Float>]
-    ) {
-        var positions: [SIMD3<Float>] = []
-        var normals: [SIMD3<Float>] = []
-        var colors: [SIMD3<Float>] = []
-        var indices = [UInt32]()
-        var texcoords = [SIMD2<Float>]()
-        var materialIndices = [UInt32]()
-        
+
+struct VertexData{
+    
+    var positions = [SIMD3<Float>]()
+    var normals = [SIMD3<Float>]()
+    var texcoords = [SIMD2<Float>]()
+    var indices = [UInt32]()
+    var materialIndices = [UInt32]()
+    var colors = [SIMD3<Float>]()
+    
+}
+
+func makeVertexData(points:[MyPoint]) -> VertexData{
+
+    var vertexData = VertexData()
+      
         let a = [SIMD3<Float>(-0.5, 0.0, 0.5),
                  SIMD3<Float>(0.0, 0.0, 0.0),
                  SIMD3<Float>(-0.5, 0.0, -0.5)]
@@ -491,7 +553,6 @@ func buildMesh(points:[MyPoint],counts: inout [UInt8]?) -> (
             let point = points[i]
   
             let color = point.color
- 
             
             let vertices = [
                 
@@ -500,8 +561,6 @@ func buildMesh(points:[MyPoint],counts: inout [UInt8]?) -> (
                 Vector(-0.5, 0.0, -0.5),
                 Vector(0.5, 0.0, 0.5),
                 
-            
-
              
                 Vector(0.5, 0.0, 0.5),
                 Vector(-0.5, 0.0, -0.5),
@@ -513,7 +572,6 @@ func buildMesh(points:[MyPoint],counts: inout [UInt8]?) -> (
             var basePolygons = [Polygon]()
             
             var j = 0
-            
             
             
             for i in stride(from: 0, to: vertices.count, by: 3) {
@@ -590,21 +648,15 @@ func buildMesh(points:[MyPoint],counts: inout [UInt8]?) -> (
         
         for polygon in polygons {
             for vertex in polygon.vertices {
-                positions.append(vertex.position.asSIMD())
-                normals.append(vertex.normal.asSIMD())
-                colors.append(vertex.color.asSIMD())
-                indices.append(UInt32(positions.count-1))
+                vertexData.positions.append(vertex.position.asSIMD())
+                vertexData.normals.append(vertex.normal.asSIMD())
+                vertexData.colors.append(vertex.color.asSIMD())
+                vertexData.indices.append(UInt32(vertexData.positions.count-1))
             }
         }
         
-        return (
-            positions: positions,
-            normals: normals,
-            texcoords: texcoords,
-            indices: indices,
-            materialIndices: materialIndices,
-            colors: colors
-        )
+
+        return vertexData
     }
 
 extension Color{
@@ -623,4 +675,9 @@ extension Vector{
         return SIMD3(x,y,z)
     }
     
+}
+extension Float {
+    func compare(with number: Float, precision: Float = 0.2) -> Bool {
+        abs(self.distance(to: number)) < 0.2
+    }
 }

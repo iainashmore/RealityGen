@@ -23,7 +23,7 @@ final class ImageGenerator: NSObject, ObservableObject {
 
     struct GeneratedImages {
         let parameter: GenerationParameter
-        let images: [UIImage]
+        let images: [CGImage]?
     }
 
     enum GenerationState {
@@ -52,8 +52,8 @@ final class ImageGenerator: NSObject, ObservableObject {
         sdPipeline = pipeline
     }
 
-    private func setGeneratedImages(_ images: GeneratedImages) { // for actor isolation
-        print("images count",images.images.count)
+    private func setGeneratedImages(_ images: GeneratedImages?) { // for actor isolation
+        print("images count",images!.images?.count)
         generatedImages = images
     }
 
@@ -133,11 +133,12 @@ extension ImageGenerator {
                                                                      progressHandler: self.progressHandler)
 
                         //debugLog("IG: images were generated.")
-                        let uiImages = cgImages.compactMap { image in
-                            if let cgImage = image { return UIImage(cgImage: cgImage)
-                            } else { return nil }
+                        let images = cgImages.compactMap { image in
+                            if let cgImage = image { return cgImage
+                           } else { return nil }
                         }
-                        await self.setGeneratedImages(GeneratedImages(parameter: param, images: uiImages))
+                        
+                        await self.setGeneratedImages(GeneratedImages(parameter: param, images: images))
                     } catch {
                         print("failed to generate images.")
                     }
@@ -162,7 +163,7 @@ extension ImageGenerator {
                                                  images: progress.currentImages.compactMap {
                 if let cgImage = $0 {
                     print("image size",cgImage.width,cgImage.height)
-                    return UIImage(cgImage: cgImage)
+                    return cgImage
                 } else {
                     return nil
                 }
